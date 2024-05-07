@@ -123,6 +123,7 @@ void load_io_requests(char *filename) {
     int count = 0;
     for (IO *io: IO_REQUESTS) {
         printf("%5d: %5d %5d\n", count, io->arrival_time, io->access_track);
+        count++;
     }
 }
 
