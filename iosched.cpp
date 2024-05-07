@@ -32,7 +32,10 @@ public:
     }
 };
 
-int IO::io_count = 0;
+/**
+ * Global Variables
+ */
+int IO::io_count = 0;           // population counter for IO Requests
 vector<IO *> IO_REQUESTS;       // initialize a list of IO Requests
 IO *ACTIVE_IO = nullptr;        // currently active IO
 int CURR_TIME = 0;              // Current time
@@ -40,8 +43,7 @@ int CURR_TRACK = 0;             // Current disk track
 unsigned long TOTAL_TIME = 0;   // Total time elapsed
 unsigned long TOTAL_MVT = 0;    // Total disk movement
 unsigned long TIME_IO_BUSY = 0; // Time when disk IO is busy
-bool FORWARD = false;           // Indicates whether the disk track is moving forward
-
+bool FORWARD = true;            // Indicates whether the disk track is moving forward
 
 class Scheduler {
 protected:
@@ -90,14 +92,8 @@ public:
 };
 
 class LOOKScheduler : public Scheduler {
-public:
-    IO *get_next() override {
-        IO *next_io = get_next_in_direction();
-        if (!next_io) FORWARD = !FORWARD;
-        return get_next_in_direction();
-    }
-
-    IO  *get_next_in_direction() {
+protected:
+    IO *get_next_in_direction() {
         auto min_it = io_queue.begin();
         int min_dist = INT_MAX;
         int direction = FORWARD ? 1 : -1;
@@ -105,41 +101,91 @@ public:
         for (auto it = io_queue.begin(); it != io_queue.end(); it++) {
             IO *io_it = *it;
             int dist = (io_it->access_track - CURR_TRACK) * direction;
-            if (dist < 0) continue;
+            if (dist < 0)
+                continue;
             if (dist < min_dist) {
                 min_dist = dist;
                 min_it = it;
                 found = true;
             }
         }
-        if (!found) return nullptr;
+        if (!found)
+            return nullptr;
         IO *next_io = *min_it;
         io_queue.erase(min_it);
         return next_io;
     }
-};
 
-class CLOOKScheduler : public Scheduler {
 public:
     IO *get_next() override {
-        return new IO(0, 0);
+        IO *next_io = get_next_in_direction();
+        if (next_io)
+            return next_io;
+        FORWARD = !FORWARD;
+        return get_next_in_direction();
     }
 };
 
-class FLOOKScheduler : public Scheduler {
+class CLOOKScheduler : public LOOKScheduler {
+protected:
+    IO *get_first_track() {
+        auto first_it = io_queue.begin();
+        int first_track = INT_MAX;
+        for (auto it = io_queue.begin(); it != io_queue.end(); it++) {
+            IO *io_it = *it;
+            if (io_it->access_track < first_track) {
+                first_track = io_it->access_track;
+                first_it = it;
+            }
+        }
+        IO *next_io = *first_it;
+        io_queue.erase(first_it);
+        return next_io;
+    }
+
 public:
     IO *get_next() override {
-        return new IO(0, 0);
+        FORWARD = true;
+        IO *next_io = get_next_in_direction();
+        if (next_io)
+            return next_io;
+        FORWARD = false;
+        return get_first_track();
+    }
+};
+
+class FLOOKScheduler : public LOOKScheduler {
+private:
+    deque<IO *> add_queue;
+
+public:
+    void add_to_queue(IO *io) override {
+        add_queue.push_back(io);
+    }
+
+    IO *get_next() override {
+        if (io_queue.empty()) {
+            io_queue.swap(add_queue);
+        }
+        IO *next_io = get_next_in_direction();
+        if (next_io)
+            return next_io;
+        FORWARD = !FORWARD;
+        return get_next_in_direction();
+    }
+
+    bool has_pending() override {
+        return !io_queue.empty() || !add_queue.empty();
     }
 };
 
 /**
  * Global Variables
  */
-bool VERBOSE = false;           // Show verbose execution trace
-bool SHOW_Q = false;            // Show verbose IO Queue Information
-bool SHOW_F = false;            // Show Additional information for FLOOK
-Scheduler *SCHEDULER = nullptr; // Scheduler instance being used in simulation
+bool VERBOSE = false;                 // Show verbose execution trace
+[[maybe_unused]] bool SHOW_Q = false; // Show verbose IO Queue Information
+[[maybe_unused]] bool SHOW_F = false; // Show Additional information for FLOOK
+Scheduler *SCHEDULER = nullptr;       // Scheduler instance being used in simulation
 
 /**
  * Get the appropriate scheduler based on the arguments
