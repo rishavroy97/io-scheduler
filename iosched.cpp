@@ -3,6 +3,8 @@
 #include <vector>
 #include <cstring>
 #include <deque>
+#include <cmath>
+#include <climits>
 
 using namespace std;
 
@@ -10,17 +12,17 @@ class IO {
 private:
     static int io_count;
     int id;
+
 public:
     int arrival_time;
     int access_track;
-    unsigned long start_time;
-    unsigned long end_time;
+    int start_time;
+    int end_time;
 
-    explicit IO(int arr_time, int access) :
-            arrival_time(arr_time),
-            access_track(access),
-            start_time(0),
-            end_time(0) {
+    explicit IO(int arr_time, int access) : arrival_time(arr_time),
+                                            access_track(access),
+                                            start_time(0),
+                                            end_time(0) {
         id = IO::io_count;
         IO::io_count++;
     }
@@ -33,10 +35,18 @@ public:
 int IO::io_count = 0;
 vector<IO *> IO_REQUESTS;       // initialize a list of IO Requests
 IO *ACTIVE_IO = nullptr;        // currently active IO
+int CURR_TIME = 0;              // Current time
+int CURR_TRACK = 0;             // Current disk track
+unsigned long TOTAL_TIME = 0;   // Total time elapsed
+unsigned long TOTAL_MVT = 0;    // Total disk movement
+unsigned long TIME_IO_BUSY = 0; // Time when disk IO is busy
+bool FORWARD = false;           // Indicates whether the disk track is moving forward
+
 
 class Scheduler {
 protected:
     deque<IO *> io_queue;
+
 public:
     virtual IO *get_next() = 0;
 
@@ -63,14 +73,49 @@ public:
 class SSTFScheduler : public Scheduler {
 public:
     IO *get_next() override {
-        return new IO(0, 0);
+        auto min_it = io_queue.begin();
+        int min_dist = INT_MAX;
+        for (auto it = io_queue.begin(); it != io_queue.end(); it++) {
+            IO *io_it = *it;
+            int distance = abs(io_it->access_track - CURR_TRACK);
+            if (distance < min_dist) {
+                min_dist = distance;
+                min_it = it;
+            }
+        }
+        IO *next_io = *min_it;
+        io_queue.erase(min_it);
+        return next_io;
     }
 };
 
 class LOOKScheduler : public Scheduler {
 public:
     IO *get_next() override {
-        return new IO(0, 0);
+        IO *next_io = get_next_in_direction();
+        if (!next_io) FORWARD = !FORWARD;
+        return get_next_in_direction();
+    }
+
+    IO  *get_next_in_direction() {
+        auto min_it = io_queue.begin();
+        int min_dist = INT_MAX;
+        int direction = FORWARD ? 1 : -1;
+        bool found = false;
+        for (auto it = io_queue.begin(); it != io_queue.end(); it++) {
+            IO *io_it = *it;
+            int dist = (io_it->access_track - CURR_TRACK) * direction;
+            if (dist < 0) continue;
+            if (dist < min_dist) {
+                min_dist = dist;
+                min_it = it;
+                found = true;
+            }
+        }
+        if (!found) return nullptr;
+        IO *next_io = *min_it;
+        io_queue.erase(min_it);
+        return next_io;
     }
 };
 
@@ -94,14 +139,7 @@ public:
 bool VERBOSE = false;           // Show verbose execution trace
 bool SHOW_Q = false;            // Show verbose IO Queue Information
 bool SHOW_F = false;            // Show Additional information for FLOOK
-bool FORWARD = false;           // Indicates whether the disk track is moving forward
 Scheduler *SCHEDULER = nullptr; // Scheduler instance being used in simulation
-unsigned long CURR_TIME = 0;    // Current time
-unsigned long CURR_TRACK = 0;   // Current disk track
-unsigned long TOTAL_TIME = 0;   // Total time elapsed
-unsigned long TOTAL_MVT = 0;    // Total disk movement
-unsigned long TIME_IO_BUSY = 0; // Time when disk IO is busy
-
 
 /**
  * Get the appropriate scheduler based on the arguments
@@ -198,7 +236,8 @@ void load_io_requests(char *filename) {
  * Start simulation
  */
 void run_simulation() {
-    if (VERBOSE) printf("TRACE\n");
+    if (VERBOSE)
+        printf("TRACE\n");
 
     unsigned long io_busy_start_time = 0;
     int curr_request_index = 0;
@@ -207,7 +246,7 @@ void run_simulation() {
             auto next_io = IO_REQUESTS[curr_request_index];
             if (next_io->arrival_time == CURR_TIME) {
                 if (VERBOSE)
-                    printf("%lu: %5d add %d\n", CURR_TIME, next_io->get_id(), next_io->access_track);
+                    printf("%d: %5d add %d\n", CURR_TIME, next_io->get_id(), next_io->access_track);
                 SCHEDULER->add_to_queue(next_io);
                 curr_request_index++;
             }
@@ -217,7 +256,7 @@ void run_simulation() {
                 ACTIVE_IO->end_time = CURR_TIME;
                 if (VERBOSE) {
                     unsigned long processing_time = CURR_TIME - ACTIVE_IO->arrival_time;
-                    printf("%lu: %5d finish %lu\n", CURR_TIME, ACTIVE_IO->get_id(), processing_time);
+                    printf("%d: %5d finish %lu\n", CURR_TIME, ACTIVE_IO->get_id(), processing_time);
                 }
                 ACTIVE_IO = nullptr;
                 TIME_IO_BUSY += CURR_TIME - io_busy_start_time;
@@ -235,7 +274,7 @@ void run_simulation() {
                 FORWARD = CURR_TRACK < ACTIVE_IO->access_track;
             }
             if (VERBOSE)
-                printf("%lu: %5d issue %d %lu\n", CURR_TIME, ACTIVE_IO->get_id(), ACTIVE_IO->access_track, CURR_TRACK);
+                printf("%d: %5d issue %d %d\n", CURR_TIME, ACTIVE_IO->get_id(), ACTIVE_IO->access_track, CURR_TRACK);
             continue;
         }
 
@@ -266,14 +305,14 @@ void run_simulation() {
 void print_output() {
     unsigned long total_turnaround = 0;
     unsigned long total_wait_time = 0;
-    unsigned long max_wait_time = 0;
+    int max_wait_time = 0;
     int num_requests = 0;
 
     for (IO *io: IO_REQUESTS) {
-        unsigned long turnaround_time = io->end_time - io->arrival_time;
-        unsigned long wait_time = io->start_time - io->arrival_time;
+        int turnaround_time = io->end_time - io->arrival_time;
+        int wait_time = io->start_time - io->arrival_time;
         max_wait_time = wait_time > max_wait_time ? wait_time : max_wait_time;
-        printf("%5d: %5d %5lu %5lu\n", io->get_id(), io->arrival_time, io->start_time, io->end_time);
+        printf("%5d: %5d %5d %5d\n", io->get_id(), io->arrival_time, io->start_time, io->end_time);
         total_turnaround += turnaround_time;
         total_wait_time += wait_time;
         num_requests += 1;
@@ -281,7 +320,7 @@ void print_output() {
     double io_utilization = (TIME_IO_BUSY * 1.0) / TOTAL_TIME;
     double avg_turnaround = (total_turnaround * 1.0) / num_requests;
     double avg_wait_time = (total_wait_time * 1.0) / num_requests;
-    printf("SUM: %lu %lu %.4lf %.2lf %.2lf %lu\n",
+    printf("SUM: %lu %lu %.4lf %.2lf %.2lf %d\n",
            TOTAL_TIME, TOTAL_MVT, io_utilization, avg_turnaround, avg_wait_time, max_wait_time);
 }
 
